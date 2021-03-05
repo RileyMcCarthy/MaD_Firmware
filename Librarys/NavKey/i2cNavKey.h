@@ -21,7 +21,7 @@ extern "C"
 {
 #include <inttypes.h>
 }
-
+void testNavKey();
 class i2cNavKey
 {
 public:

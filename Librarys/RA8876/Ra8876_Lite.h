@@ -819,7 +819,7 @@ struct TouchLocation
 /*Example Functions*/
 void runDisplay();
 void runDisplayTouch();
-
+void DrawImageTest();
 class Ra8876_Lite
 {
 private:

@@ -14,7 +14,7 @@ Note: If you use our company's adapter board, you must remove the R6 resistor on
 #include <stdint.h>
 #include "simpletools.h"
 #include "Ra8876_Lite.h"
-
+#include "pic16bpp_word.h"
 #define GT9271_INT 7
 #define CLK 28
 #define DATA 29
@@ -133,4 +133,22 @@ void runDisplayTouch()
             }
         }
     }
+}
+
+void DrawImageTest()
+{
+    if (!ra8876liteTouch.begin())
+    {
+        while (1)
+            ;
+    }
+    ra8876liteTouch.displayOn(true);
+
+    ra8876liteTouch.canvasImageStartAddress(PAGE1_START_ADDR);
+    ra8876liteTouch.canvasImageWidth(SCREEN_WIDTH);
+    ra8876liteTouch.activeWindowXY(0, 0);
+    ra8876liteTouch.activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
+    ra8876liteTouch.drawSquareFill(0, 0, 1023, 599, COLOR65K_BLUE);
+
+    ra8876liteTouch.putPicture_16bpp(50 + 128, 50 + 128, 128, 128, pic16bpp_word);
 }

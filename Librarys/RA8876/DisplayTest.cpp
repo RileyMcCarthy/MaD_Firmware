@@ -1,5 +1,5 @@
 #include "Ra8876_Lite.h"
-#include "simpletools.h"
+//#include "simpletools.h"
 const int RA8876_XNSCS = 10;
 const int RA8876_XNRESET = 9;
 
@@ -7,7 +7,7 @@ char stringEnd = '\0';
 char string1[] = {0xa6, 0xb0, 0xa4, 0xe9, 0xaa, 0x46, 0xa4, 0xe8, stringEnd}; //BIG5
 char string2[] = {0xbb, 0xb6, 0xd3, 0xad, 0xca, 0xb9, 0xd3, 0xc3, stringEnd}; //BG2312
 
-Ra8876_Lite ra8876lite(RA8876_XNSCS, RA8876_XNRESET, 0, 0, 0);
+Ra8876_Lite ra8876lite(RA8876_XNSCS, RA8876_XNRESET, 0, 0, 0, 8);
 
 void runDisplay()
 {
@@ -15,7 +15,7 @@ void runDisplay()
     pause(1000);
     if (!ra8876lite.begin())
     {
-        print("RA8876 or RA8877 Fail");
+        print("RA8876 or RA8877 Fail\n");
         while (1)
             ;
     }

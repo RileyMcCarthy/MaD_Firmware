@@ -3,7 +3,6 @@
 */
 #include "i2cNavKey.h"
 
-#include <stdio.h>     // Recommended over iostream for saving space
 #include <propeller.h> // Propeller-specific functions
 
 const int IntPin = 22; /* Definition of the interrupt pin*/
@@ -85,6 +84,6 @@ void testNavKey()
     while (1)
     {
         navkey.updateStatus();
-        pause(1000);
+        pause(10);
     }
 }

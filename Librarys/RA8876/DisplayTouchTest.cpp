@@ -10,11 +10,13 @@ Works with Arduino 1.6.0 IDE
 Works with Arduino Due Board
 Note: If you use our company's adapter board, you must remove the R6 resistor on the adapter board, otherwise the capacitive touch screen will not work.
 ****************************************************/
+#include <PropWare/memory/sd.h>
+#include <PropWare/filesystem/fat/fatfs.h>
+#include <PropWare/filesystem/fat/fatfilereader.h>
 
 #include <stdint.h>
-#include "simpletools.h"
+//#include "simpletools.h"
 #include "Ra8876_Lite.h"
-#include "pic16bpp_word.h"
 #define GT9271_INT 7
 #define CLK 28
 #define DATA 29
@@ -22,11 +24,10 @@ Note: If you use our company's adapter board, you must remove the R6 resistor on
 #define RA8876_XNRESET 9
 
 uint8_t buf[30];
-Ra8876_Lite ra8876liteTouch(RA8876_XNSCS, RA8876_XNRESET, CLK, DATA, GT9271_INT); //int xnscs, int xnreset, int clk, int data, int GT9271_INT
+Ra8876_Lite ra8876liteTouch(RA8876_XNSCS, RA8876_XNRESET, CLK, DATA, GT9271_INT, 8); //int xnscs, int xnreset, int clk, int data, int GT9271_INT
 TouchLocation touchLocations[10];
 void runDisplayTouch()
 {
-
     if (!ra8876liteTouch.begin())
     {
         while (1)
@@ -59,14 +60,11 @@ void runDisplayTouch()
         while (flag)
         {
 
-            uint8_t st = input(GT9271_INT);
-            if (!st)
+            uint32_t st = ra8876liteTouch.readGT9271TouchLocation(touchLocations, 10);
+            if (1)
             {
-                print("Touch: \n");
-
-                uint8_t count = ra8876liteTouch.readGT9271TouchLocation(touchLocations, 10);
-                print("count: %d\n", count);
-                for (im = 0; im < count; im++)
+                //uint8_t count = ra8876liteTouch.readGT9271TouchLocation(touchLocations, 10);
+                for (im = 0; im < st; im++)
                 {
                     if ((touchLocations[im].x > 960) && (touchLocations[im].y < 20))
                         flag = 0;
@@ -135,12 +133,15 @@ void runDisplayTouch()
     }
 }
 
-void DrawImageTest()
+void DrawKeyboard()
 {
+    print("starting\n");
+    sd_mount(22, 23, 24, 25);
     if (!ra8876liteTouch.begin())
     {
         while (1)
-            ;
+        {
+        }
     }
     ra8876liteTouch.displayOn(true);
 
@@ -150,5 +151,14 @@ void DrawImageTest()
     ra8876liteTouch.activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
     ra8876liteTouch.drawSquareFill(0, 0, 1023, 599, COLOR65K_BLUE);
 
-    ra8876liteTouch.putPicture_16bpp(50 + 128, 50 + 128, 128, 128, pic16bpp_word);
+    ra8876liteTouch.putPicture_16bpp((SCREEN_WIDTH - 850) / 2, SCREEN_HEIGHT - 351, 851, 351);
+
+    FILE *fp = fopen("keyboard.bin", "r"); // Open a file for writing
+    int end = -1;
+    while (end != 0)
+    {
+        char data;
+        end = fread(&data, sizeof(char), 1, fp);
+        ra8876liteTouch.lcdDataWrite(data);
+    }
 }

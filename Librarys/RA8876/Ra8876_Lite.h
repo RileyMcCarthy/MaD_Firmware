@@ -1,7 +1,7 @@
 //**************************************************************//
 /*
 File Name : Ra8876_Lite.h                                   
-Author    : RAiO Application Team                             
+Author    : RAiO Application Team, Modified by Riley McCarthy                           
 Edit Date : 09/13/2017
 Version   : v1.0
 */
@@ -17,8 +17,10 @@ typedef unsigned char ru8;
 typedef unsigned short ru16;
 typedef unsigned long ru32;
 
-#include <stdint.h>
 #include "simpletools.h"
+#include "SPI_Fast.h"
+#include "libpropeller/sd/sd.h"
+#include "Error.h"
 
 #define RA8876_SPI_CMDWRITE 0x00
 #define RA8876_SPI_DATAWRITE 0x80
@@ -816,6 +818,23 @@ struct TouchLocation
     uint16_t x;
     uint16_t y;
 };
+struct Button
+{
+    void (*onPress)(Button button);
+    uint16_t xmin, xmax;
+    uint16_t ymin, ymax;
+    int name; //use enumeration
+};
+struct Image
+{
+    char name[12];
+    int page;
+    int x0;
+    int y0;
+    int width;
+    int height;
+    int backgroundColor;
+};
 /*Example Functions*/
 void runDisplay();
 void runDisplayTouch();
@@ -823,23 +842,31 @@ void DrawImageTest();
 class Ra8876_Lite
 {
 private:
-    int _xnscs, _xnreset, mosi, miso, sck, _clk, _data, _GT9271_INT;
-    uint8_t i2c_addr, i2c_addr_write, i2c_addr_read;
-    i2c *bus;
+    int _xnscs, _xnreset, mosi, miso, sck, _clk, _data, _GT9271_INT, _backlight;
+    int i2c_addr, i2c_addr_write, i2c_addr_read;
+    int _xnscs_mask, _xnreset_mask, _GT9271_INT_mask, _clk_mask, _backlight_mask;
+    i2c bus;
+    SPI_Bus spi_bus;
+    libpropeller::SD sd;
 
 public:
-    Ra8876_Lite(int xnscs, int xnreset, int clk, int data, int GT9271_INT);
-    bool begin(void);
+    Error begin(int xnscs, int xnreset, int clk, int data, int GT9271_INT, int backlight);
 
-    bool ra8876Initialize(void);
+    Error ra8876Initialize(void);
     bool ra8876PllInitial(void);
     bool ra8876SdramInitial(void);
+
+    /*SD Card*/
+    void setSD(int sd_do, int sd_clk, int sd_di, int sd_cs);
+    void loadImage(Image image);
+    void bteMemoryCopyImage(Image image, int xpos, int ypos);
 
     /*Touch*/
     uint8_t gt9271_Send_Cfg(uint8_t *buf, uint16_t cfg_len);
     void writeGT9271TouchRegister(uint16_t regAddr, uint8_t *val, uint16_t cnt);
     uint8_t readGT9271TouchAddr(uint16_t regAddr, uint8_t *pBuf, uint8_t len);
     uint8_t readGT9271TouchLocation(TouchLocation *pLoc, uint8_t num);
+    void checkButtons(Button *buttons, const int amount);
 
     /*access*/
     void lcdRegWrite(ru8 reg);
@@ -919,7 +946,7 @@ public:
 
     void genitopCharacterRomParameter(ru8 scs_select, ru8 clk_div, ru8 rom_select, ru8 character_select, ru8 gt_width); //b7h,bbh,ceh,cfh
 
-    void putString(ru16 x0, ru16 y0, char *str);
+    void putString(const ru16 x0, const ru16 y0, const char *str);
     void putDec(ru16 x0, ru16 y0, rs32 vaule, ru8 len, const char *flag);
     void putFloat(ru16 x0, ru16 y0, double vaule, ru8 len, ru8 precision, const char *flag);
     void putHex(ru16 x0, ru16 y0, ru32 vaule, ru8 len, const char *flag);
@@ -972,5 +999,4 @@ public:
     void dma_24bitAddressBlockMode(ru8 scs_selct, ru8 clk_div, ru16 x0, ru16 y0, ru16 width, ru16 height, ru16 picture_width, ru32 addr);
     void dma_32bitAddressBlockMode(ru8 scs_selct, ru8 clk_div, ru16 x0, ru16 y0, ru16 width, ru16 height, ru16 picture_width, ru32 addr);
 };
-
 #endif

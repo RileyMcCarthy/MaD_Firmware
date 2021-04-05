@@ -51,7 +51,7 @@ void i2cNavKey::pins(int theSCL, int theSDA)
 {
   sda = theSDA;
   scl = theSCL;
-  i2c_open(bus, scl, sda, 0);
+  i2c_open(&bus, scl, sda, 0);
 }
 
 /** Used for initialize the NavKey **/
@@ -80,7 +80,6 @@ bool i2cNavKey::updateStatus(void)
 {
 
   _stat = readNavKeyInt(REG_STATUSB2);
-  print("status:'%u'\n", _stat);
   _stat2 = 0;
   if (_stat == 0)
   {
@@ -642,59 +641,59 @@ void i2cNavKey::writeEEPROM(uint8_t add, uint8_t data)
 uint8_t i2cNavKey::readNavKeyByte(uint8_t reg)
 {
   uint8_t rdata = 0xFF;
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110); //sends i2c address w/ write bit set
-  i2c_writeByte(bus, reg);
-  i2c_start(bus);
-  i2c_writeByte(bus, _add | 0b00000001);
-  rdata = i2c_readByte(bus, 1);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110); //sends i2c address w/ write bit set
+  i2c_writeByte(&bus, reg);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add | 0b00000001);
+  rdata = i2c_readByte(&bus, 1);
+  i2c_stop(&bus);
   return rdata;
 }
 
 /** Read 2 bytes from the NavKey **/
 int16_t i2cNavKey::readNavKeyInt(uint8_t reg)
 {
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110); //sends i2c address w/ write bit set
-  i2c_writeByte(bus, reg);
-  i2c_start(bus);
-  i2c_writeByte(bus, _add | 0b00000001);
-  _tem_data.bval[1] = i2c_readByte(bus, 0);
-  _tem_data.bval[0] = i2c_readByte(bus, 1);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110); //sends i2c address w/ write bit set
+  i2c_writeByte(&bus, reg);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add | 0b00000001);
+  _tem_data.bval[1] = i2c_readByte(&bus, 0);
+  _tem_data.bval[0] = i2c_readByte(&bus, 1);
+  i2c_stop(&bus);
   return ((int16_t)_tem_data.val);
 }
 
 /** Read 4 bytes from the NavKey **/
 int32_t i2cNavKey::readNavKeyLong(uint8_t reg)
 {
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110); //sends i2c address w/ write bit set
-  i2c_writeByte(bus, reg);
-  i2c_start(bus);
-  i2c_writeByte(bus, _add | 0b00000001);
-  _tem_data.bval[3] = i2c_readByte(bus, 0);
-  _tem_data.bval[2] = i2c_readByte(bus, 0);
-  _tem_data.bval[1] = i2c_readByte(bus, 0);
-  _tem_data.bval[0] = i2c_readByte(bus, 1);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110); //sends i2c address w/ write bit set
+  i2c_writeByte(&bus, reg);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add | 0b00000001);
+  _tem_data.bval[3] = i2c_readByte(&bus, 0);
+  _tem_data.bval[2] = i2c_readByte(&bus, 0);
+  _tem_data.bval[1] = i2c_readByte(&bus, 0);
+  _tem_data.bval[0] = i2c_readByte(&bus, 1);
+  i2c_stop(&bus);
   return ((int32_t)_tem_data.val);
 }
 
 /** Read 4 bytes from the NavKey **/
 float i2cNavKey::readNavKeyFloat(uint8_t reg)
 {
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110); //sends i2c address w/ write bit set
-  i2c_writeByte(bus, reg);
-  i2c_start(bus);
-  i2c_writeByte(bus, _add | 0b00000001);
-  _tem_data.bval[3] = i2c_readByte(bus, 0);
-  _tem_data.bval[2] = i2c_readByte(bus, 0);
-  _tem_data.bval[1] = i2c_readByte(bus, 0);
-  _tem_data.bval[0] = i2c_readByte(bus, 1);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110); //sends i2c address w/ write bit set
+  i2c_writeByte(&bus, reg);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add | 0b00000001);
+  _tem_data.bval[3] = i2c_readByte(&bus, 0);
+  _tem_data.bval[2] = i2c_readByte(&bus, 0);
+  _tem_data.bval[1] = i2c_readByte(&bus, 0);
+  _tem_data.bval[0] = i2c_readByte(&bus, 1);
+  i2c_stop(&bus);
   return ((float)_tem_data.fval);
 }
 
@@ -702,37 +701,37 @@ float i2cNavKey::readNavKeyFloat(uint8_t reg)
 /** Send to the NavKey 1 byte **/
 void i2cNavKey::writeNavKey(uint8_t reg, uint8_t data)
 {
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110);
-  i2c_writeByte(bus, reg);
-  i2c_writeByte(bus, data);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110);
+  i2c_writeByte(&bus, reg);
+  i2c_writeByte(&bus, data);
+  i2c_stop(&bus);
 }
 
 /** Send to the NavKey 4 byte **/
 void i2cNavKey::writeNavKey(uint8_t reg, int32_t data)
 {
   _tem_data.val = data;
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110);
-  i2c_writeByte(bus, reg);
-  i2c_writeByte(bus, _tem_data.bval[3]);
-  i2c_writeByte(bus, _tem_data.bval[2]);
-  i2c_writeByte(bus, _tem_data.bval[1]);
-  i2c_writeByte(bus, _tem_data.bval[0]);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110);
+  i2c_writeByte(&bus, reg);
+  i2c_writeByte(&bus, _tem_data.bval[3]);
+  i2c_writeByte(&bus, _tem_data.bval[2]);
+  i2c_writeByte(&bus, _tem_data.bval[1]);
+  i2c_writeByte(&bus, _tem_data.bval[0]);
+  i2c_stop(&bus);
 }
 
 /** Send to the NavKey 2 byte **/
 void i2cNavKey::writeNavKey(uint8_t reg, uint16_t data)
 {
   _tem_data.val = data;
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110);
-  i2c_writeByte(bus, reg);
-  i2c_writeByte(bus, _tem_data.bval[1]);
-  i2c_writeByte(bus, _tem_data.bval[0]);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110);
+  i2c_writeByte(&bus, reg);
+  i2c_writeByte(&bus, _tem_data.bval[1]);
+  i2c_writeByte(&bus, _tem_data.bval[0]);
+  i2c_stop(&bus);
 }
 
 /** Send to the NavKey 4 byte for floating number **/
@@ -740,25 +739,25 @@ void i2cNavKey::writeNavKey(uint8_t reg, float data)
 {
   _tem_data.fval = data;
 
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110);
-  i2c_writeByte(bus, reg);
-  i2c_writeByte(bus, _tem_data.bval[3]);
-  i2c_writeByte(bus, _tem_data.bval[2]);
-  i2c_writeByte(bus, _tem_data.bval[1]);
-  i2c_writeByte(bus, _tem_data.bval[0]);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110);
+  i2c_writeByte(&bus, reg);
+  i2c_writeByte(&bus, _tem_data.bval[3]);
+  i2c_writeByte(&bus, _tem_data.bval[2]);
+  i2c_writeByte(&bus, _tem_data.bval[1]);
+  i2c_writeByte(&bus, _tem_data.bval[0]);
+  i2c_stop(&bus);
 }
 
 /** Send to the NavKey 3 byte **/
 void i2cNavKey::writeNavKey24bit(uint8_t reg, uint32_t data)
 {
   _tem_data.val = data;
-  i2c_start(bus);
-  i2c_writeByte(bus, _add & 0b11111110);
-  i2c_writeByte(bus, reg);
-  i2c_writeByte(bus, _tem_data.bval[2]);
-  i2c_writeByte(bus, _tem_data.bval[1]);
-  i2c_writeByte(bus, _tem_data.bval[0]);
-  i2c_stop(bus);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, _add & 0b11111110);
+  i2c_writeByte(&bus, reg);
+  i2c_writeByte(&bus, _tem_data.bval[2]);
+  i2c_writeByte(&bus, _tem_data.bval[1]);
+  i2c_writeByte(&bus, _tem_data.bval[0]);
+  i2c_stop(&bus);
 }

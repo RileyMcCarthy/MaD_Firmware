@@ -17,10 +17,7 @@
 #define i2cNavKey_H
 
 #include "simpletools.h"
-extern "C"
-{
-#include <inttypes.h>
-}
+
 void testNavKey();
 class i2cNavKey
 {
@@ -286,7 +283,7 @@ public:
 	void writeEEPROM(uint8_t add, uint8_t data);
 
 private:
-	i2c *bus;
+	i2c bus;
 	int scl;
 	int sda;
 

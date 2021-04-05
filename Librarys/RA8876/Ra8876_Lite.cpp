@@ -8,13 +8,14 @@ Version   : v2.0  1.modify bte_DestinationMemoryStartAddr bug
                   3.modify ra8876PllInitial 
 */
 //**************************************************************//
-#include "simpletools.h"
 #include "Ra8876_Lite.h"
-
 //**************************************************************//
-Ra8876_Lite::Ra8876_Lite(int xnscs, int xnreset, int clk, int data, int GT9271_INT)
+//**************************************************************//
+//**************************************************************//
+Error Ra8876_Lite::begin(int xnscs, int xnreset, int clk, int data, int GT9271_INT, int backlight)
 {
   _xnscs = xnscs;
+  _backlight = backlight;
   _xnreset = xnreset;
   _GT9271_INT = GT9271_INT;
   _clk = clk;
@@ -22,74 +23,73 @@ Ra8876_Lite::Ra8876_Lite(int xnscs, int xnreset, int clk, int data, int GT9271_I
   sck = 1;
   miso = 3;
   mosi = 2;
-}
-//**************************************************************//
-//**************************************************************//
-bool Ra8876_Lite::begin(void)
-{
-  i2c_open(bus, _clk, _data, 0);
+  _xnreset_mask = 1 << _xnreset;
+  _backlight_mask = 1 << _backlight;
+  _xnscs_mask = 1 << _xnscs;
+  _GT9271_INT_mask = 1 << _GT9271_INT;
+  spi_open(&spi_bus, mosi, miso, sck);
+  i2c_open(&bus, _clk, _data, 0);
   i2c_addr = 0x5d;
   i2c_addr_write = (i2c_addr << 1) & 0b11111110;
   i2c_addr_read = (i2c_addr << 1) | 0b00000001;
 
-  low(_xnreset);
-  high(_GT9271_INT);
-  pause(2);
-  high(_xnreset);
-  pause(20);
-  set_direction(_GT9271_INT, 0);
-  pause(1000);
+  DIRA |= _xnreset_mask;
+  DIRA |= _backlight_mask;
+  DIRA |= _xnscs_mask;
+  //DIRA |= _GT9271_INT_mask;
+  //DIRA |= _GT9271_INT_mask;
+
+  //OUTA &= ~_GT9271_INT_mask; //interrupt low
+  OUTA &= ~_xnreset_mask; //interrupt low
+
+  pause(2);              //wait 2ms
+  OUTA |= _xnreset_mask; //reset high
+  pause(20);             //wait 20ms
+  //DIRA &= ~_GT9271_INT_mask;    //interrupt input
+  pause(1000); //wait 1s
+
   gt9271_Send_Cfg((uint8_t *)GTP_CFG_DATA, sizeof(GTP_CFG_DATA));
-  high(8);
+  OUTA |= _backlight_mask; //backlight high
+  OUTA |= _xnscs_mask;     //cs high
+  OUTA &= ~(1 << sck);     //sck low
 
-  high(_xnscs);
-  low(sck);
+  OUTA |= _xnreset_mask;  //reset high
+  pause(1);               //wait 1ms
+  OUTA &= ~_xnreset_mask; //reset low
+  pause(1);               //wait 1ms
+  OUTA |= _xnreset_mask;  //reset high
+  pause(10);              //wait 10ms
 
-  high(_xnreset);
-  pause(1);
-  low(_xnreset);
-  pause(1);
-  high(_xnreset);
-  pause(10);
   //read ID code must disable pll, 01h bit7 set 0
   lcdRegDataWrite(0x01, 0x08);
-  pause(100);
+  pause(100); //wait 100ms
+
   if ((lcdRegDataRead(0xff) != 0x76) && (lcdRegDataRead(0xff) != 0x77))
   {
-    print("RA8876 or RA8877 not found!\n");
-    return false;
+    return Error::DISPLAY_NOT_FOUND;
   }
-  else
+  Error err;
+  if ((err = ra8876Initialize()) != Error::SUCCESS)
   {
-    print("RA8876 or RA8877 connect pass!\n");
+    return err;
   }
 
-  if (!ra8876Initialize())
-  {
-    print("ra8876 or RA8877 initial fail!\n");
-    return false;
-  }
-  else
-  {
-    print("RA8876 or RA8877 initial Pass!\n");
-  }
-
-  return true;
+  return Error::SUCCESS;
 }
 //**************************************************************//
 
-bool Ra8876_Lite::ra8876Initialize(void)
+Error Ra8876_Lite::ra8876Initialize(void)
 {
   if (!ra8876PllInitial())
   {
-    print("PLL initial fail!");
-    return false;
+    // print("PLL initial fail!");
+    return Error::DISPLAY_PLL_FAIL;
   }
 
   if (!ra8876SdramInitial())
   {
-    print("SDRAM initial fail!");
-    return false;
+    // print("SDRAM initial fail!");
+    return Error::DISPLAY_SDRAM_FAIL;
   }
 
   lcdRegWrite(RA8876_CCR); //01h
@@ -135,56 +135,54 @@ bool Ra8876_Lite::ra8876Initialize(void)
   canvasImageWidth(SCREEN_WIDTH);
   activeWindowXY(0, 0);
   activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
-  return true;
+  return Error::SUCCESS;
 }
 //**************************************************************//
 //**************************************************************//
 void Ra8876_Lite::lcdRegWrite(ru8 reg)
 {
-  //SPI.transfer(_xnscs,RA8876_SPI_CMDWRITE,SPI_CONTINUE);
-  //SPI.transfer(_xnscs,reg);
-  low(_xnscs); //enable communication using chip select
-  shift_out(mosi, sck, MSBFIRST, 8, RA8876_SPI_CMDWRITE);
-  shift_out(mosi, sck, MSBFIRST, 8, reg);
-  high(_xnscs);
+  OUTA &= ~_xnscs_mask; //enable communication using chip select
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)RA8876_SPI_CMDWRITE);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)reg);
+  //spi.shift_out(8, (uint32_t)RA8876_SPI_CMDWRITE);
+  //spi.shift_out(8, (uint32_t)reg);
+  OUTA |= _xnscs_mask; //chip select high, end communication
 }
 //**************************************************************//
 //**************************************************************//
 void Ra8876_Lite::lcdDataWrite(ru8 data)
 {
-  //SPI.transfer(_xnscs,RA8876_SPI_DATAWRITE,SPI_CONTINUE);
-  //SPI.transfer(_xnscs,data);
-  low(_xnscs); //enable communication using chip select
-  shift_out(mosi, sck, MSBFIRST, 8, RA8876_SPI_DATAWRITE);
-  shift_out(mosi, sck, MSBFIRST, 8, data);
-  high(_xnscs);
+  OUTA &= ~_xnscs_mask; //enable communication using chip select
+  //spi.shift_out(8, (uint32_t)RA8876_SPI_DATAWRITE);
+  //spi.shift_out(8, (uint32_t)data);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)RA8876_SPI_DATAWRITE);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)data);
+  OUTA |= _xnscs_mask; //chip select high, end communication
 }
 //**************************************************************//
 //**************************************************************//
 ru8 Ra8876_Lite::lcdDataRead(void)
 {
-  //SPI.transfer(_xnscs,RA8876_SPI_DATAREAD,SPI_CONTINUE);
-  //ru8 data = SPI.transfer(_xnscs,0xff);
-  low(_xnscs); //enable communication using chip select
-  shift_out(mosi, sck, MSBFIRST, 8, RA8876_SPI_DATAREAD);
-  high(mosi);
-  ru8 data = shift_in(miso, sck, MSBPRE, 8);
-  high(_xnscs); //end communication
-  print("lcdDataRead: %u\n", data);
+  OUTA &= ~_xnscs_mask; //enable communication using chip select
+  //spi.shift_out(8, (uint32_t)RA8876_SPI_DATAREAD);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)RA8876_SPI_DATAREAD);
+  OUTA |= (1 << mosi); //mosi high
+  //ru8 data = spi.shift_in(8);
+  ru8 data = shift_in_fast(&spi_bus, 8);
+  OUTA |= _xnscs_mask; //chip select high, end communication
   return data;
 }
 //**************************************************************//
 //**************************************************************//
 ru8 Ra8876_Lite::lcdStatusRead(void)
 {
-  //SPI.transfer(_xnscs,RA8876_SPI_STATUSREAD,SPI_CONTINUE);
-  //ru8 data= SPI.transfer(_xnscs,0xff);
-  low(_xnscs); //enable communication using chip select
-  shift_out(mosi, sck, MSBFIRST, 8, RA8876_SPI_STATUSREAD);
-  high(mosi);
-  ru8 data = shift_in(miso, sck, MSBPRE, 8);
-  high(_xnscs); //end communication
-  print("lcdStatusRead: %u\n", data);
+  OUTA &= ~_xnscs_mask; //enable communication using chip select
+  //spi.shift_out(8, (uint32_t)RA8876_SPI_STATUSREAD);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)RA8876_SPI_STATUSREAD);
+  OUTA |= (1 << mosi); //mosi high
+  //ru8 data = spi.shift_in(8);
+  ru8 data = shift_in_fast(&spi_bus, 8);
+  OUTA |= _xnscs_mask; //chip select high, end communication
   return data;
 }
 //**************************************************************//
@@ -207,14 +205,14 @@ ru8 Ra8876_Lite::lcdRegDataRead(ru8 reg)
 //**************************************************************//
 void Ra8876_Lite::lcdDataWrite16bbp(ru16 data)
 {
-  //SPI.transfer(_xnscs,RA8876_SPI_DATAWRITE,SPI_CONTINUE);
-  //SPI.transfer(_xnscs,data,SPI_CONTINUE);
-  //SPI.transfer(_xnscs,data>>8);
-  low(_xnscs); //enable communication using chip select
-  shift_out(mosi, sck, MSBFIRST, 8, RA8876_SPI_DATAWRITE);
-  shift_out(mosi, sck, MSBFIRST, 8, data);
-  shift_out(mosi, sck, MSBFIRST, 8, data >> 8);
-  high(_xnscs); //end communication
+  OUTA &= ~_xnscs_mask; //enable communication using chip select
+  //spi.shift_out(8, (uint32_t)RA8876_SPI_DATAWRITE);
+  //spi.shift_out(8, (uint32_t)data);
+  //spi.shift_out(8, (uint32_t)data >> 8);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)RA8876_SPI_DATAWRITE);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)data);
+  shift_out_fast(&spi_bus, (uint32_t)8, (uint32_t)data >> 8);
+  OUTA |= _xnscs_mask; //chip select high, end communication
 }
 
 //**************************************************************//
@@ -320,10 +318,7 @@ bool Ra8876_Lite::checkSdramReady(void)
   ru32 i;
   for (i = 0; i < 1000000; i++) //Please according to your usage to modify i value.
   {
-    //delayMicroseconds(1);
-    // set_pause_dt(CLKFREQ/1000000);
-    pause(1);
-    //  set_pause_dt(CLKFREQ/1000);
+    pause(1); //wait 1ms
     if ((lcdStatusRead() & 0x04) == 0x04)
     {
       return true;
@@ -345,7 +340,7 @@ bool Ra8876_Lite::checkIcReady(void)
   {
     //delayMicroseconds(1);
     // set_pause_dt(CLKFREQ/1000000);
-    pause(1);
+    pause(1); //wait 1ms
     // set_pause_dt(CLKFREQ/1000);
     if ((lcdStatusRead() & 0x02) == 0x00)
     {
@@ -371,9 +366,6 @@ ex:
  Set X_DIVK=2
  Set X_DIVM=0
  => (X_DIVN+1)=(XPLLx4)/10*/
-  ru16 x_Divide, PLLC1, PLLC2;
-  ru16 pll_m_lo, pll_m_hi;
-  ru8 temp;
 
   // Set tft output pixel clock
   if (SCAN_FREQ >= 79) //&&(SCAN_FREQ<=100))
@@ -486,10 +478,10 @@ ex:
     lcdRegDataWrite(0x0A, (30 * 8 / OSC_FREQ) - 1); //set to 30MHz if out off range
   }
 
-  pause(1);
+  pause(1); //wait 1ms
   lcdRegWrite(0x01);
   lcdDataWrite(0x80);
-  pause(2); //wait for pll stable
+  pause(2); //wait 2ms for pll stable
   if ((lcdDataRead() & 0x80) == 0x80)
     return true;
   else
@@ -521,8 +513,7 @@ void Ra8876_Lite::displayOn(bool on)
     lcdRegDataWrite(RA8876_DPCR, XPCLK_INV << 7 | RA8876_DISPLAY_ON << 6 | RA8876_OUTPUT_RGB);
   else
     lcdRegDataWrite(RA8876_DPCR, XPCLK_INV << 7 | RA8876_DISPLAY_OFF << 6 | RA8876_OUTPUT_RGB);
-
-  pause(20);
+  pause(20); //wait 20ms
 }
 //**************************************************************//
 //**************************************************************//
@@ -764,6 +755,351 @@ void Ra8876_Lite::bte_WindowSize(ru16 width, ru16 height)
   lcdRegDataWrite(RA8876_BTE_HIG1, height >> 8); //b4h
 }
 
+/*BTE function*/
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMemoryCopy(ru32 s0_addr, ru16 s0_image_width, ru16 s0_x, ru16 s0_y, ru32 des_addr, ru16 des_image_width,
+                                ru16 des_x, ru16 des_y, ru16 copy_width, ru16 copy_height)
+{
+  bte_Source0_MemoryStartAddr(s0_addr);
+  bte_Source0_ImageWidth(s0_image_width);
+  bte_Source0_WindowStartXY(s0_x, s0_y);
+  //bte_Source1_MemoryStartAddr(des_addr);
+  //bte_Source1_ImageWidth(des_image_width);
+  //bte_Source1_WindowStartXY(des_x,des_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+
+  bte_WindowSize(copy_width, copy_height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_CODE_12 << 4 | RA8876_BTE_MEMORY_COPY_WITH_ROP);                                             //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  check2dBusy();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMemoryCopyWithROP(ru32 s0_addr, ru16 s0_image_width, ru16 s0_x, ru16 s0_y, ru32 s1_addr, ru16 s1_image_width, ru16 s1_x, ru16 s1_y,
+                                       ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 copy_width, ru16 copy_height, ru8 rop_code)
+{
+  bte_Source0_MemoryStartAddr(s0_addr);
+  bte_Source0_ImageWidth(s0_image_width);
+  bte_Source0_WindowStartXY(s0_x, s0_y);
+  bte_Source1_MemoryStartAddr(s1_addr);
+  bte_Source1_ImageWidth(s1_image_width);
+  bte_Source1_WindowStartXY(s1_x, s1_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(copy_width, copy_height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, rop_code << 4 | RA8876_BTE_MEMORY_COPY_WITH_ROP);                                                           //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  check2dBusy();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMemoryCopyWithChromaKey(ru32 s0_addr, ru16 s0_image_width, ru16 s0_x, ru16 s0_y,
+                                             ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 copy_width, ru16 copy_height, ru16 chromakey_color)
+{
+  bte_Source0_MemoryStartAddr(s0_addr);
+  bte_Source0_ImageWidth(s0_image_width);
+  bte_Source0_WindowStartXY(s0_x, s0_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(copy_width, copy_height);
+  backGroundColor16bpp(chromakey_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_MEMORY_COPY_WITH_CHROMA);                                                                        //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  check2dBusy();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithROP(ru32 s1_addr, ru16 s1_image_width, ru16 s1_x, ru16 s1_y, ru32 des_addr, ru16 des_image_width,
+                                     ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru8 rop_code, const unsigned char *data)
+{
+  ru16 i, j;
+  bte_Source1_MemoryStartAddr(s1_addr);
+  bte_Source1_ImageWidth(s1_image_width);
+  bte_Source1_WindowStartXY(s1_x, s1_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, rop_code << 4 | RA8876_BTE_MPU_WRITE_WITH_ROP);                                                             //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (i = 0; i < height; i++)
+  {
+    for (j = 0; j < (width * 2); j++)
+    {
+      checkWriteFifoNotFull();
+      lcdDataWrite(*data);
+      data++;
+    }
+  }
+  checkWriteFifoEmpty();
+}
+
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithROP(ru32 s1_addr, ru16 s1_image_width, ru16 s1_x, ru16 s1_y, ru32 des_addr, ru16 des_image_width,
+                                     ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru8 rop_code, const unsigned short *data)
+{
+  ru16 i, j;
+  bte_Source1_MemoryStartAddr(s1_addr);
+  bte_Source1_ImageWidth(s1_image_width);
+  bte_Source1_WindowStartXY(s1_x, s1_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, rop_code << 4 | RA8876_BTE_MPU_WRITE_WITH_ROP);                                                             //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (j = 0; j < height; j++)
+  {
+    for (i = 0; i < width; i++)
+    {
+      checkWriteFifoNotFull(); //if high speed mcu and without Xnwait check
+      lcdDataWrite16bbp(*data);
+      data++;
+      //checkWriteFifoEmpty();//if high speed mcu and without Xnwait check
+    }
+  }
+  checkWriteFifoEmpty();
+}
+//**************************************************************//
+//write data after setting
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithROP(ru32 s1_addr, ru16 s1_image_width, ru16 s1_x, ru16 s1_y, ru32 des_addr, ru16 des_image_width,
+                                     ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru8 rop_code)
+{
+  ru16 i, j;
+  bte_Source1_MemoryStartAddr(s1_addr);
+  bte_Source1_ImageWidth(s1_image_width);
+  bte_Source1_WindowStartXY(s1_x, s1_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, rop_code << 4 | RA8876_BTE_MPU_WRITE_WITH_ROP);                                                             //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithChromaKey(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 chromakey_color, const unsigned char *data)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  backGroundColor16bpp(chromakey_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_MPU_WRITE_WITH_CHROMA);                                                                          //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (i = 0; i < height; i++)
+  {
+    for (j = 0; j < (width * 2); j++)
+    {
+      checkWriteFifoNotFull();
+      lcdDataWrite(*data);
+      data++;
+    }
+  }
+  checkWriteFifoEmpty();
+}
+
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithChromaKey(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 chromakey_color, const unsigned short *data)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  backGroundColor16bpp(chromakey_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_MPU_WRITE_WITH_CHROMA);                                                                          //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (j = 0; j < height; j++)
+  {
+    for (i = 0; i < width; i++)
+    {
+      checkWriteFifoNotFull(); //if high speed mcu and without Xnwait check
+      lcdDataWrite16bbp(*data);
+      data++;
+      //checkWriteFifoEmpty();//if high speed mcu and without Xnwait check
+    }
+  }
+  checkWriteFifoEmpty();
+}
+//**************************************************************//
+//write data after setting
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteWithChromaKey(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 chromakey_color)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  backGroundColor16bpp(chromakey_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_MPU_WRITE_WITH_CHROMA);                                                                          //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteColorExpansion(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 foreground_color, ru16 background_color, const unsigned char *data)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  foreGroundColor16bpp(foreground_color);
+  backGroundColor16bpp(background_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_BUS_WIDTH8 << 4 | RA8876_BTE_MPU_WRITE_COLOR_EXPANSION);                                     //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (i = 0; i < height; i++)
+  {
+    for (j = 0; j < (width / 8); j++)
+    {
+      checkWriteFifoNotFull();
+      lcdDataWrite(*data);
+      data++;
+    }
+  }
+  checkWriteFifoEmpty();
+  check2dBusy();
+}
+//**************************************************************//
+//write data after setting
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteColorExpansion(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 foreground_color, ru16 background_color)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  foreGroundColor16bpp(foreground_color);
+  backGroundColor16bpp(background_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_BUS_WIDTH8 << 4 | RA8876_BTE_MPU_WRITE_COLOR_EXPANSION);                                     //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+}
+//**************************************************************//
+/*background_color do not set the same as foreground_color*/
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteColorExpansionWithChromaKey(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 foreground_color, ru16 background_color, const unsigned char *data)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  foreGroundColor16bpp(foreground_color);
+  backGroundColor16bpp(background_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_BUS_WIDTH8 << 4 | RA8876_BTE_MPU_WRITE_COLOR_EXPANSION_WITH_CHROMA);                         //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+
+  for (i = 0; i < height; i++)
+  {
+    for (j = 0; j < (width / 8); j++)
+    {
+      checkWriteFifoNotFull();
+      lcdDataWrite(*data);
+      data++;
+    }
+  }
+  checkWriteFifoEmpty();
+  check2dBusy();
+}
+//**************************************************************//
+/*background_color do not set the same as foreground_color*/
+//write data after setting
+//**************************************************************//
+void Ra8876_Lite::bteMpuWriteColorExpansionWithChromaKey(ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 foreground_color, ru16 background_color)
+{
+  ru16 i, j;
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  foreGroundColor16bpp(foreground_color);
+  backGroundColor16bpp(background_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_BUS_WIDTH8 << 4 | RA8876_BTE_MPU_WRITE_COLOR_EXPANSION_WITH_CHROMA);                         //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4);                                                                                    //90h
+  ramAccessPrepare();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::btePatternFill(ru8 p8x8or16x16, ru32 s0_addr, ru16 s0_image_width, ru16 s0_x, ru16 s0_y,
+                                 ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height)
+{
+  bte_Source0_MemoryStartAddr(s0_addr);
+  bte_Source0_ImageWidth(s0_image_width);
+  bte_Source0_WindowStartXY(s0_x, s0_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_CODE_12 << 4 | RA8876_BTE_PATTERN_FILL_WITH_ROP);                                            //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+
+  if (p8x8or16x16 == 0)
+    lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4 | RA8876_PATTERN_FORMAT8X8); //90h
+  else
+    lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4 | RA8876_PATTERN_FORMAT16X16); //90h
+
+  check2dBusy();
+}
+//**************************************************************//
+//**************************************************************//
+void Ra8876_Lite::btePatternFillWithChromaKey(ru8 p8x8or16x16, ru32 s0_addr, ru16 s0_image_width, ru16 s0_x, ru16 s0_y,
+                                              ru32 des_addr, ru16 des_image_width, ru16 des_x, ru16 des_y, ru16 width, ru16 height, ru16 chromakey_color)
+{
+  bte_Source0_MemoryStartAddr(s0_addr);
+  bte_Source0_ImageWidth(s0_image_width);
+  bte_Source0_WindowStartXY(s0_x, s0_y);
+  bte_DestinationMemoryStartAddr(des_addr);
+  bte_DestinationImageWidth(des_image_width);
+  bte_DestinationWindowStartXY(des_x, des_y);
+  bte_WindowSize(width, height);
+  backGroundColor16bpp(chromakey_color);
+  lcdRegDataWrite(RA8876_BTE_CTRL1, RA8876_BTE_ROP_CODE_12 << 4 | RA8876_BTE_PATTERN_FILL_WITH_CHROMA);                                         //91h
+  lcdRegDataWrite(RA8876_BTE_COLR, RA8876_S0_COLOR_DEPTH_16BPP << 5 | RA8876_S1_COLOR_DEPTH_16BPP << 2 | RA8876_DESTINATION_COLOR_DEPTH_16BPP); //92h
+  if (p8x8or16x16 == 0)
+    lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4 | RA8876_PATTERN_FORMAT8X8); //90h
+  else
+    lcdRegDataWrite(RA8876_BTE_CTRL0, RA8876_BTE_ENABLE << 4 | RA8876_PATTERN_FORMAT16X16); //90h
+  check2dBusy();
+}
+
 //**************************************************************//
 /*These 8 bits determine prescaler value for Timer 0 and 1.*/
 /*Time base is ¡°Core_Freq / (Prescaler + 1)¡±*/
@@ -985,7 +1321,7 @@ void Ra8876_Lite::genitopCharacterRomParameter(ru8 scs_select, ru8 clk_div, ru8 
 //**************************************************************//
 //support ra8876 internal font and external string font code write from data pointer
 //**************************************************************//
-void Ra8876_Lite::putString(ru16 x0, ru16 y0, char *str)
+void Ra8876_Lite::putString(const ru16 x0, const ru16 y0, const char *str)
 {
   textMode(true);
   setTextCursor(x0, y0);
@@ -999,1220 +1335,7 @@ void Ra8876_Lite::putString(ru16 x0, ru16 y0, char *str)
   check2dBusy();
   textMode(false);
 }
-/*put value,base on sprintf*/
-//**************************************************************//
-//vaule: -2147483648(-2^31) ~ 2147483647(2^31-1)
-//len: 1~11 minimum output length
-/*
-  [flag] 
-    n:¿¿ÓÒ¡¡
-    -:¿¿×ó
-    +:Ý”³öÕýØ“Ì–
-    (space):®”²»Ý”³öÕýØ“Ì–•r£¬¾ÍÝ”³ö¿Õ°×
-    0:ÔÚé_î^ÌŽ(×ó‚È) Ña 0£¬¶ø·ÇÑa¿Õ°×¡£ 
- */
-//**************************************************************//
-void Ra8876_Lite::putDec(ru16 x0, ru16 y0, rs32 vaule, ru8 len, const char *flag)
-{
-  char char_buffer[12];
-  switch (len)
-  {
-  case 1:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%1d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-1d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+1d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%01d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 2:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%2d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-2d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+2d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%02d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 3:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%3d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-3d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+3d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%03d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 4:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%4d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-4d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+4d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%04d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 5:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%5d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-5d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+5d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%05d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 6:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%6d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-6d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+6d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%06d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 7:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%7d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-7d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+7d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%07d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 8:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%8d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-8d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+8d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%08d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 9:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%9d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-9d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+9d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%09d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 10:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%10d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-10d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+10d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%010d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 11:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%11d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      sprintf(char_buffer, "%-11d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      sprintf(char_buffer, "%+11d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%011d", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  default:
-    break;
-  }
-}
 
-//**************************************************************//
-//vaule: (3.4E-38) ~ (3.4E38)
-//len: 1~11 minimum output length
-//precision: right side of point numbers 1~4
-/*
-  [flag] 
-    n:¿¿ÓÒ¡¡
-    -:¿¿×ó
-    +:Ý”³öÕýØ“Ì–
-    (space):®”²»Ý”³öÕýØ“Ì–•r£¬¾ÍÝ”³ö¿Õ°×
-    #: ŠÖÆÝ”³öÐ¡”µüc
-    0:ÔÚé_î^ÌŽ(×ó‚È) Ña 0£¬¶ø·ÇÑa¿Õ°×¡£
-    
- */
-//arduino Floats have only 6-7 decimal digits of precision. That means the total number of digits, not the number to the right of the decimal point.
-//Unlike other platforms, where you can get more precision by using a double (e.g. up to 15 digits), on the Arduino, double is the same size as float.
-//**************************************************************//
-void Ra8876_Lite::putFloat(ru16 x0, ru16 y0, double vaule, ru8 len, ru8 precision, const char *flag)
-{
-  char char_buffer[20];
-  switch (len)
-  {
-  case 1:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%1.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%1.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%1.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%1.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-1.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-1.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-1.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-1.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+1.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+1.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+1.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+1.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%01.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%01.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%01.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%01.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 2:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%2.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%2.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%2.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%2.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-2.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-2.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-2.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-2.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+2.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+2.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+2.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+2.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%02.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%02.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%02.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%02.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 3:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%3.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%3.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%3.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%3.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-3.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-3.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-3.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-3.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+3.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+3.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+3.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+3.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%03.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%03.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%03.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%03.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 4:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%4.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%4.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%4.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%4.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-4.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-4.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-4.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-4.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+4.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+4.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+4.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+4.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%04.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%04.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%04.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%04.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 5:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%5.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%5.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%5.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%5.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-5.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-5.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-5.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-5.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+5.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+5.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+5.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+5.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%05.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%05.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%05.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%05.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 6:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%6.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%6.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%6.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%6.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-6.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-6.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-6.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-6.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+6.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+6.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+6.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+6.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%06.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%06.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%06.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%06.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 7:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%7.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%7.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%7.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%7.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-7.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-7.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-7.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-7.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+7.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+7.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+7.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+7.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%07.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%07.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%07.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%07.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 8:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%8.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%8.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%8.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%8.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-8.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-8.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-8.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-8.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+8.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+8.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+8.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+8.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%08.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%08.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%08.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%08.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 9:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%9.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%9.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%9.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%9.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-9.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-9.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-9.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-9.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+9.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+9.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+9.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+9.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%09.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%09.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%09.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%09.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 10:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%10.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%10.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%10.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%10.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-10.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-10.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-10.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-10.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+10.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+10.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+10.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+10.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%010.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%010.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%010.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%010.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 11:
-    if (flag == "n")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%11.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%11.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%11.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%11.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "-")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%-11.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%-11.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%-11.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%-11.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "+")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%+11.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%+11.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%+11.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%+11.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      if (precision == 1)
-        sprintf(char_buffer, "%011.1f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 2)
-        sprintf(char_buffer, "%011.2f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 3)
-        sprintf(char_buffer, "%011.3f", vaule);
-      putString(x0, y0, char_buffer);
-      if (precision == 4)
-        sprintf(char_buffer, "%011.4f", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  default:
-    break;
-  }
-}
-//**************************************************************//
-//vaule: 0x00000000 ~ 0xffffffff
-//len: 1~11 minimum output length
-/*
-  [flag] 
-    n:¿¿ÓÒ,Ña¿Õ°×¡¡
-    #:ŠÖÆÝ”³ö 0x ×÷žéé_î^.
-    0:ÔÚé_î^ÌŽ(×ó‚È) Ña 0£¬¶ø·ÇÑa¿Õ°×¡£
-    x:ŠÖÆÝ”³ö 0x ×÷žéé_î^£¬Ña 0¡£ 
- */
-//**************************************************************//
-void Ra8876_Lite::putHex(ru16 x0, ru16 y0, ru32 vaule, ru8 len, const char *flag)
-{
-  char char_buffer[12];
-  switch (len)
-  {
-  case 1:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%1x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%01x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#1x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#01x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 2:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%2x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%02x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#2x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#02x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 3:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%3x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%03x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#3x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#03x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 4:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%4x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%04x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#4x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#04x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 5:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%5x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%05x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#5x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#05x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 6:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%6x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%06x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#6x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#06x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 7:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%7x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%07x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#7x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#07x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 8:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%8x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%08x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#8x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#08x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 9:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%9x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%09x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#9x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#09x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-  case 10:
-    if (flag == "n")
-    {
-      sprintf(char_buffer, "%10x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "0")
-    {
-      sprintf(char_buffer, "%010x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "#")
-    {
-      sprintf(char_buffer, "%#10x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    else if (flag == "x")
-    {
-      sprintf(char_buffer, "%#010x", vaule);
-      putString(x0, y0, char_buffer);
-    }
-    break;
-
-  default:
-    break;
-  }
-}
 /*draw function*/
 //**************************************************************//
 //**************************************************************//
@@ -2394,48 +1517,43 @@ void Ra8876_Lite::drawEllipse(ru16 x0, ru16 y0, ru16 xr, ru16 yr, ru16 color)
 void Ra8876_Lite::writeGT9271TouchRegister(uint16_t regAddr, uint8_t *val, uint16_t cnt)
 {
   uint16_t i = 0;
-  i2c_start(bus);
-  i2c_writeByte(bus, i2c_addr_write);
-  i2c_writeByte(bus, regAddr >> 8);
-  i2c_writeByte(bus, regAddr);
-  print("entering loop\n");
+  i2c_start(&bus);
+  i2c_writeByte(&bus, i2c_addr_write);
+  i2c_writeByte(&bus, regAddr >> 8);
+  i2c_writeByte(&bus, regAddr);
   for (i = 0; i < cnt; i++, val++)
   {
-    print("writing:%d\n", *val);
-    i2c_writeByte(bus, *val);
+    i2c_writeByte(&bus, *val);
   }
-  i2c_stop(bus);
+  i2c_stop(&bus);
 }
 
 uint8_t Ra8876_Lite::gt9271_Send_Cfg(uint8_t *buf, uint16_t cfg_len)
 {
   writeGT9271TouchRegister(0x8047, buf, cfg_len);
-  pause(10);
+  pause(10); //wait 10ms
 }
 
 uint8_t Ra8876_Lite::readGT9271TouchAddr(uint16_t regAddr, uint8_t *pBuf, uint8_t len)
 {
   uint8_t i;
-  i2c_start(bus);
+  i2c_start(&bus);
 
-  i2c_writeByte(bus, i2c_addr_write);
-  i2c_writeByte(bus, regAddr >> 8);
-  i2c_writeByte(bus, regAddr);
-  i2c_start(bus);
-  print("length: %d\n", len);
-  i2c_writeByte(bus, i2c_addr_read);
+  i2c_writeByte(&bus, i2c_addr_write);
+  i2c_writeByte(&bus, regAddr >> 8);
+  i2c_writeByte(&bus, regAddr);
+  i2c_start(&bus);
+  i2c_writeByte(&bus, i2c_addr_read);
   for (i = 0; i < len; i++)
   {
     if (i == (len - 1))
     {
-      pBuf[i] = i2c_readByte(bus, 1);
-      print("endbuf %d: '%u'\n", i, pBuf[i]);
+      pBuf[i] = i2c_readByte(&bus, 1);
       break;
     }
-    pBuf[i] = i2c_readByte(bus, 0);
-    print("buf %d: '%u'\n", i, pBuf[i]);
+    pBuf[i] = i2c_readByte(&bus, 0);
   }
-  i2c_stop(bus);
+  i2c_stop(&bus);
   return i;
 }
 
@@ -2455,12 +1573,9 @@ uint8_t Ra8876_Lite::readGT9271TouchLocation(TouchLocation *pLoc, uint8_t num)
     ss[0] = 0;
     readGT9271TouchAddr(0x814e, ss, 1);
     uint8_t status = ss[0];
-    print("status: %u\n", status);
     if ((status & 0x0f) == 0)
       break; // no points detected
     uint8_t hitPoints = status & 0x0f;
-
-    print("number of hit points = %d\n", hitPoints);
 
     uint8_t tbuf[32];
     uint8_t tbuf1[32];
@@ -2528,3 +1643,127 @@ uint8_t Ra8876_Lite::readGT9271TouchLocation(TouchLocation *pLoc, uint8_t num)
 
   return retVal;
 }
+int lastPressTime = 0;
+void Ra8876_Lite::checkButtons(Button *buttons, const int amount)
+{
+  TouchLocation loc[1];
+  if (readGT9271TouchLocation(loc, 1) > 0)
+  {
+    //printf("found click: %d,%d   %d %d\n", loc[0].x, loc[0].y, (loc[0].x > buttons[i].xmin) && (loc[0].x < buttons[i].xmax), (loc[0].y > buttons[i].ymin) && (loc[0].y < buttons[i].ymax));
+    for (int i = 0; i < amount; i++)
+    {
+      //print("found click: %d,%d   %d %d\n", loc[0].x, loc[0].y, (loc[0].x > buttons[i].xmin) && (loc[0].x < buttons[i].xmax), (loc[0].y > buttons[i].ymin) && (loc[0].y < buttons[i].ymax));
+      //print("button range: %d-%d,%d-%d", buttons[i].xmin, buttons[i].xmax, buttons[i].ymin, buttons[i].ymax);
+      if (((SCREEN_WIDTH - loc[0].x) > buttons[i].xmin) && ((SCREEN_WIDTH - loc[0].x) < buttons[i].xmax))
+      {
+        if (((SCREEN_HEIGHT - loc[0].y) > buttons[i].ymin) && ((SCREEN_HEIGHT - loc[0].y) < buttons[i].ymax))
+        {
+          if (((CNT - lastPressTime) < CLKFREQ / 5))
+          {
+            return;
+          }
+          printf("fouind bubtton");
+          lastPressTime = CNT;
+          buttons[i].onPress(buttons[i]);
+          return;
+        }
+      }
+    }
+  }
+}
+
+void Ra8876_Lite::setSD(int sd_do, int sd_clk, int sd_di, int sd_cs)
+{
+  sd.ClearError();
+  sd.Mount(sd_do, sd_clk, sd_di, sd_cs);
+  if (sd.HasError())
+  {
+
+    printf("Error mounting sd: %d\n", sd.GetError());
+  }
+}
+
+/*
+To load image with proper settings: use inkscape to export image with anialiasing turned off, then open in gimp where 
+it is exported to jpg using max quality settings (100) and use preview to check for any back "smudging". Finally
+use the image took from RA8876 to convert that jpg to bin. 8 characters max with extension of three characters.
+*/
+void Ra8876_Lite::loadImage(Image image)
+{
+  if (image.page == 1)
+  {
+    canvasImageStartAddress(PAGE1_START_ADDR);
+  }
+  else if (image.page == 2)
+  {
+    canvasImageStartAddress(PAGE2_START_ADDR);
+  }
+  else if (image.page == 3)
+  {
+    canvasImageStartAddress(PAGE3_START_ADDR);
+  }
+
+  sd.Open(image.name, 'r');
+  if (sd.HasError())
+  {
+
+    printf("Error opening file(%s): %d\n", image.name, sd.GetError());
+    sd.ClearError();
+    sd.Close();
+    canvasImageStartAddress(PAGE1_START_ADDR);
+    activeWindowXY(0, 0);
+    activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+  putPicture_16bpp(image.x0, image.y0, image.width, image.height);
+  int data;
+  int limit = image.width * image.height * 2;
+  int count = 0;
+  while ((data = sd.Get()) != -1)
+  {
+    lcdDataWrite(data);
+    if (count > limit)
+    {
+      printf("file not found");
+      sd.Close();
+      canvasImageStartAddress(PAGE1_START_ADDR);
+      activeWindowXY(0, 0);
+      activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
+      break;
+    }
+    count++;
+  }
+  sd.Close();
+  canvasImageStartAddress(PAGE1_START_ADDR);
+  activeWindowXY(0, 0);
+  activeWindowWH(SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void Ra8876_Lite::bteMemoryCopyImage(Image image, int xpos, int ypos)
+{
+  int pageAddr = 0;
+  switch (image.page)
+  {
+  case 1:
+    pageAddr = PAGE1_START_ADDR;
+    break;
+  case 2:
+    pageAddr = PAGE2_START_ADDR;
+    break;
+  case 3:
+    pageAddr = PAGE3_START_ADDR;
+    break;
+  default:
+    break;
+  }
+
+  if (image.backgroundColor != NULL)
+  {
+    bteMemoryCopyWithChromaKey(pageAddr, SCREEN_WIDTH, image.x0, image.y0, PAGE1_START_ADDR, SCREEN_WIDTH, xpos, ypos, image.width, image.height, image.backgroundColor);
+  }
+  else
+  {
+    bteMemoryCopy(pageAddr, SCREEN_WIDTH, image.x0, image.y0, PAGE1_START_ADDR, SCREEN_WIDTH, xpos, ypos, image.width, image.height);
+  }
+}
+//display.bteMemoryCopy(PAGE2_START_ADDR, SCREEN_WIDTH, 0, 0, PAGE1_START_ADDR, SCREEN_WIDTH, 0, 0, 100, 50);
